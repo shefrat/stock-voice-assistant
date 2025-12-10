@@ -12,7 +12,6 @@ from streamlit_mic_recorder import mic_recorder, speech_to_text
 model_name = 'gemini-2.5-flash'
 
 # --- NEW: SYSTEM INSTRUCTION TEMPLATE (MOVED) ---
-# We define the template here, but the specific data will be injected later.
 SYSTEM_INSTRUCTION_BASE = """
 You are a helpful retail stock assistant. All your answers must be based *strictly* on 
 the provided stock data, which includes columns like Item_Name, Quantity, Price, etc.
@@ -22,8 +21,7 @@ The data available is (first 10 rows):
 Always keep the answers conversational and concise. Acknowledge that you have the stock data.
 """
 
-# The model must be re-initialized when a new file is uploaded/context is set,
-# so we'll do a basic initialization here, and a final one inside the main logic.
+# Initial model object (will be re-initialized with config later)
 model = genai.GenerativeModel(model_name)
 
 # --- NEW: Initialize Chat History and Chat Session in Session State ---
@@ -32,7 +30,7 @@ if "messages" not in st.session_state:
 if "chat" not in st.session_state:
     st.session_state.chat = None
 if "context_loaded" not in st.session_state:
-    st.session_state.context_loaded = False # New state to control re-initialization
+    st.session_state.context_loaded = False 
 
 # --- Function to convert Text to Speech and Play (No Change) ---
 def text_to_speech(text):
@@ -71,19 +69,18 @@ if uploaded_file:
     csv_string = get_stock_data_string(uploaded_file)
     
     # 2. Add a system prompt and initialize chat (only once per file upload)
-    # Re-initialize the model *with the configuration* only when the file is uploaded.
     if not st.session_state.context_loaded:
         
-        # 🎯 FIX: Inject the CSV data into the system instruction template
+        # Inject the CSV data into the system instruction template
         final_system_instruction = SYSTEM_INSTRUCTION_BASE.format(csv_data_string=csv_string)
         
-        # 🎯 FIX: Pass the system instruction in the model's configuration upon initialization
+        # Pass the system instruction in the model's configuration upon initialization
         model = genai.GenerativeModel(
             model_name=model_name,
-            system_instruction=final_system_instruction # This is the old/correct location
+            system_instruction=final_system_instruction 
         )
         
-        # Now, start the chat WITHOUT the system_instruction keyword argument
+        # Start the chat WITHOUT the system_instruction keyword argument
         st.session_state.chat = model.start_chat() 
         
         # Set state flags
@@ -93,7 +90,9 @@ if uploaded_file:
         initial_message = "Hello! I have loaded your stock data. Ask me anything about the inventory!"
         st.session_state.messages.append({"role": "assistant", "content": initial_message})
         text_to_speech(initial_message)
-        st.experimental_rerun()
+        
+        # 🎯 FIX: Changed st.experimental_rerun() to st.rerun()
+        st.rerun() 
 
 
     # 3. Display chat history (No Change)
@@ -121,10 +120,10 @@ if uploaded_file:
             
         myfile = None
         try:
-            # FIX: Use genai.upload_file() instead of client.files.upload()
+            # Use genai.upload_file()
             myfile = genai.upload_file(temp_audio_path) 
             
-            # Send Message to Chat API (No Change to this line)
+            # Send Message to Chat API
             response = st.session_state.chat.send_message(
                 contents=[myfile],
                 config={'temperature': 0.1}
@@ -144,11 +143,12 @@ if uploaded_file:
         
         finally:
             os.remove(temp_audio_path)
-            # FIX: Use genai.delete_file() instead of client.files.delete()
+            # Use genai.delete_file()
             if myfile:
                  genai.delete_file(name=myfile.name) 
             
-            st.experimental_rerun() 
+            # 🎯 FIX: Changed st.experimental_rerun() to st.rerun()
+            st.rerun() 
 
 else:
     # Reset states when file is not uploaded
