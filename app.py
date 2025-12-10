@@ -21,7 +21,8 @@ except FileNotFoundError:
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # We use Gemini 1.5 Flash because it's fast and multimodal (hears audio + reads files)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# OLD: model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 # --- 2. UI SETUP ---
 st.title("🛒 Retail Stock Voice Assistant")
