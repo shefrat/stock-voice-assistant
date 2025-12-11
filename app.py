@@ -9,15 +9,13 @@ from openai import OpenAI
 # ========= 1. OPENAI CLIENT CONFIG =========
 
 # Make sure OPENAI_API_KEY is set in your environment
-# e.g. export OPENAI_API_KEY="sk-..."
 client = OpenAI()
 
-# You can adjust these model names if needed
+# Models (updated names)
 TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"   # speech → text
-CHAT_MODEL       = "gpt-5.1-mini"             # main reasoning model
+CHAT_MODEL       = "gpt-4.1-mini"             # main reasoning model
 TTS_MODEL        = "gpt-4o-mini-tts"          # text → speech
 TTS_VOICE        = "coral"                    # alloy / ash / ballad / coral / echo / etc.
-
 
 # ========= 2. STREAMLIT UI LAYOUT =========
 
@@ -46,7 +44,8 @@ try:
     else:
         df = pd.read_excel(uploaded_file)
 except Exception as e:
-    st.error(f"Error reading file: {e}")
+    st.error("Error reading file.")
+    st.exception(e)
     st.stop()
 
 st.subheader("Data preview")
@@ -54,7 +53,6 @@ st.dataframe(df.head())
 
 # Whole table as CSV text (for context to the model)
 csv_text = df.to_csv(index=False)
-
 
 # ========= 4. AUDIO INPUT (MIC) =========
 
@@ -68,7 +66,6 @@ if not audio_data:
     st.stop()
 
 st.info("Processing your audio… this may take a few seconds.")
-
 
 # ========= 5. SAVE AUDIO TO TEMP FILE =========
 
@@ -121,7 +118,7 @@ Rules:
         ]
     )
 
-    # Helper: new API returns output as a structured object; `.output_text`
+    # New Responses API helper
     answer_text = response.output_text
 
     st.markdown("### ✅ Answer")
@@ -133,7 +130,6 @@ Rules:
 
     speech_path = Path(tempfile.gettempdir()) / "answer_speech.mp3"
 
-    # Stream TTS audio to a file
     with client.audio.speech.with_streaming_response.create(
         model=TTS_MODEL,
         voice=TTS_VOICE,
@@ -142,14 +138,14 @@ Rules:
     ) as tts_response:
         tts_response.stream_to_file(speech_path)
 
-    # Play back in Streamlit
     with open(speech_path, "rb") as f:
         audio_bytes = f.read()
 
     st.audio(audio_bytes, format="audio/mp3", autoplay=True)
 
 except Exception as e:
-    st.error(f"An error occurred: {e}")
+    st.error("An error occurred while processing your request:")
+    st.exception(e)   # <-- this will show the real traceback in Streamlit
 
 finally:
     # Clean up temp audio file
