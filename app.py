@@ -11,13 +11,17 @@ from streamlit_mic_recorder import mic_recorder
 # Replace with your actual key if not in environment variables
 # os.environ["GEMINI_API_KEY"] = "YOUR_API_KEY_HERE"
 
-# Validate API Key
 if not os.environ.get("GOOGLE_API_KEY"):
     st.error("⚠️ API Key missing! Please set GEMINI_API_KEY in your environment.")
     st.stop()
 
-# Initialize Model
 model_name = 'gemini-2.5-flash'
+
+# --- NEW: CONFIGURATION DICTIONARY ---
+# We define settings here to pass them during model creation, avoiding the 'config' error later.
+generation_config = {
+    "temperature": 0.1
+}
 
 SYSTEM_INSTRUCTION_BASE = """
 You are a helpful retail stock assistant. All your answers must be based *strictly* on 
@@ -45,22 +49,15 @@ def text_to_speech(text):
             tts.write_to_fp(temp_tts)
             temp_tts_path = temp_tts.name
         
-        # Use an empty container for the audio player to prevent layout jumps
         audio_placeholder = st.empty()
         audio_placeholder.audio(temp_tts_path, format='audio/mp3', autoplay=True)
-        
-        # Give the browser time to start playing before cleanup
         time.sleep(2) 
-        
-        # Clear the player and remove the file
         audio_placeholder.empty()
         os.remove(temp_tts_path)
-        
     except Exception as e:
         st.warning(f"Audio playback failed: {e}")
 
 def get_stock_data_string(uploaded_file):
-    """Reads the uploaded file and returns a string preview."""
     try:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
@@ -74,27 +71,25 @@ def get_stock_data_string(uploaded_file):
 # --- MAIN APP UI ---
 st.title("🛒 Retail Stock Voice Assistant")
 
-# File Uploader
 uploaded_file = st.file_uploader("Upload Stock CSV/Excel", type=["csv", "xlsx"])
 
 if uploaded_file:
     # 1. Initialize Chat Context (Runs Once)
     if not st.session_state.context_loaded:
         csv_string = get_stock_data_string(uploaded_file)
-        
-        # Configure the model with the system instruction
         final_system_instruction = SYSTEM_INSTRUCTION_BASE.format(csv_data_string=csv_string)
+        
+        # 🎯 FIX 2: Pass 'generation_config' here instead of in send_message
         model = genai.GenerativeModel(
             model_name=model_name,
-            system_instruction=final_system_instruction
+            system_instruction=final_system_instruction,
+            generation_config=generation_config
         )
         
-        # Start Chat
         st.session_state.chat = model.start_chat()
         st.session_state.context_loaded = True
         st.session_state.messages = []
         
-        # Welcome Message
         welcome_msg = "I've loaded your stock data. Ready for your questions!"
         st.session_state.messages.append({"role": "assistant", "content": welcome_msg})
         text_to_speech(welcome_msg)
@@ -110,53 +105,45 @@ if uploaded_file:
     # 3. Voice Input Section
     st.write("---")
     col1, col2 = st.columns([1, 4])
-    
     with col1:
-        # THE RECORDER BUTTON
+        # The button will look like a single microphone icon.
+        # Click once to start, click "Stop" when done.
         audio_data = mic_recorder(
-            start_prompt="🎤 Speak",
+            start_prompt="🎤 Start",
             stop_prompt="🛑 Stop",
             just_once=True,
             use_container_width=True,
             format="wav",
-            key="voice_recorder" 
+            key="voice_recorder"
         )
 
-    # 4. Process Audio if Recorded
+    # 4. Process Audio
     if audio_data and audio_data['bytes']:
         with st.spinner("Listening and analyzing..."):
-            # Save audio to temp file
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
                 temp_audio.write(audio_data['bytes'])
                 temp_audio_path = temp_audio.name
 
             try:
-                # Upload to Gemini
                 myfile = genai.upload_file(temp_audio_path)
                 
-                # Send to Chat
-                # 🎯 FIX IS HERE: Changed 'contents' to 'content'
+                # 🎯 FIX 1: Use 'content' (singular) and REMOVE 'config'
                 response = st.session_state.chat.send_message(
-                    content=[myfile], 
-                    config={'temperature': 0.1}
+                    content=[myfile]
                 )
                 answer_text = response.text
 
-                # Update History
                 st.session_state.messages.append({"role": "user", "content": "🎤 (Audio Question)"})
                 st.session_state.messages.append({"role": "assistant", "content": answer_text})
                 
-                # Play Audio Response
                 text_to_speech(answer_text)
 
             except Exception as e:
                 st.error(f"An error occurred: {e}")
 
             finally:
-                # Cleanup
                 if os.path.exists(temp_audio_path):
                     os.remove(temp_audio_path)
-                # Rerun to update chat history
                 st.rerun()
 
 else:
