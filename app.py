@@ -53,28 +53,29 @@ Rules:
 - Be brief, clear and conversational.
 """
 
-    secret = client.realtime.client_secrets.create(  # uses /v1/realtime/client_secrets :contentReference[oaicite:0]{index=0}
+    secret = client.realtime.client_secrets.create(
         session={
             "type": "realtime",
-            "model": "gpt-realtime",  # realtime speech model :contentReference[oaicite:1]{index=1}
+            "model": "gpt-realtime",
             "instructions": instructions,
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": 24000},
-                    # server VAD = automatic “start/stop on speech” turns
                     "turn_detection": {
                         "type": "server_vad",
                     },
                 },
                 "output": {
                     "format": {"type": "audio/pcm", "rate": 24000},
-                    "voice": "alloy",  # pick your favorite voice
+                    "voice": "alloy",
                     "speed": 1.0,
                 },
             },
-            "output_modalities": ["audio", "text"],
+            # <-- only ONE modality
+            "output_modalities": ["audio"],
         }
     )
+
 
     # We only return the secret value; the browser never sees your real API key
     return jsonify({"client_secret": secret.value})
