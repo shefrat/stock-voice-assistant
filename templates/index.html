@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Retail Stock Voice Assistant</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 800px;
+        margin: 40px auto;
+      }
+      button {
+        padding: 10px 18px;
+        font-size: 16px;
+        margin-right: 8px;
+      }
+      #log {
+        white-space: pre-wrap;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 12px;
+        margin-top: 12px;
+        min-height: 120px;
+      }
+      .you {
+        color: #2563eb;
+      }
+      .bot {
+        color: #16a34a;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🛒 Retail Stock Voice Assistant</h1>
+    <p>
+      <button id="start">🎙 Start voice assistant</button>
+      <button id="stop" disabled>⏹ Stop</button>
+      <span id="status"></span>
+    </p>
+    <p>
+      Speak naturally about your stock, for example:<br />
+      <code>How many Red T-Shirts do we have?</code><br />
+      <code>Which products are out of stock?</code>
+    </p>
+
+    <audio id="speaker" autoplay></audio>
+
+    <h3>Conversation</h3>
+    <div id="log" aria-live="polite"></div>
+
+    <script type="module">
+      import {
+        RealtimeAgent,
+        RealtimeSession,
+      } from "https://cdn.jsdelivr.net/npm/@openai/agents-realtime/+esm";
+      // CDN for Agents Realtime SDK :contentReference[oaicite:4]{index=4}
+
+      const startBtn = document.getElementById("start");
+      const stopBtn = document.getElementById("stop");
+      const statusEl = document.getElementById("status");
+      const speaker = document.getElementById("speaker");
+      const logEl = document.getElementById("log");
+
+      let session = null;
+      let micStream = null;
+
+      function logLine(text, cls) {
+        const span = document.createElement("span");
+        if (cls) span.className = cls;
+        span.textContent = text + "\n";
+        logEl.appendChild(span);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      async function startAssistant() {
+        try {
+          startBtn.disabled = true;
+          statusEl.textContent = "Requesting microphone…";
+
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+          statusEl.textContent = "Requesting client secret…";
+
+          const res = await fetch("/client-secret");
+          if (!res.ok) throw new Error("Failed to get client secret");
+          const { client_secret } = await res.json();
+
+          statusEl.textContent = "Connecting to Realtime…";
+
+          const agent = new RealtimeAgent({
+            name: "Retail Stock Assistant",
+            // Main instructions come from the Python backend via session config
+          });
+
+          session = new RealtimeSession(agent, {
+            model: "gpt-realtime",
+            audioElement: speaker,
+            config: {
+              // Ask for both audio + text from the model
+              outputModalities: ["audio", "text"],
+              turnDetection: {
+                // semantic VAD = natural, continuous speech detection :contentReference[oaicite:5]{index=5}
+                type: "semantic_vad",
+                createResponse: true,
+              },
+            },
+          });
+
+          // Connect using the ephemeral secret
+          await session.connect({ apiKey: client_secret });
+
+          // Stream mic to the model
+          session.addInputAudioStream(micStream);
+
+          // Log transcripts (user + assistant text)
+          session.on("transcript", (evt) => {
+            const who = evt.role === "user" ? "You" : "Assistant";
+            const cls = evt.role === "user" ? "you" : "bot";
+            logLine(`${who}: ${evt.text}`, cls);
+          });
+
+          statusEl.textContent = "Connected — start talking!";
+          stopBtn.disabled = false;
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "Error: " + (err.message || String(err));
+          startBtn.disabled = false;
+        }
+      }
+
+      async function stopAssistant() {
+        stopBtn.disabled = true;
+        statusEl.textContent = "Stopping…";
+
+        try {
+          if (session) {
+            session.close?.();
+            session = null;
+          }
+          if (micStream) {
+            micStream.getTracks().forEach((t) => t.stop());
+            micStream = null;
+          }
+        } finally {
+          statusEl.textContent = "Stopped.";
+          startBtn.disabled = false;
+        }
+      }
+
+      startBtn.addEventListener("click", startAssistant);
+      stopBtn.addEventListener("click", stopAssistant);
+    </script>
+  </body>
+</html>

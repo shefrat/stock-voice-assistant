@@ -1,155 +1,86 @@
 import os
-import tempfile
-from pathlib import Path
-
-import streamlit as st
 import pandas as pd
+from flask import Flask, jsonify, render_template
 from openai import OpenAI
 
-# ========= 1. OPENAI CLIENT CONFIG =========
-
-# Make sure OPENAI_API_KEY is set in your environment
+# ---------- Config ----------
+CSV_PATH = "stock.csv"  # path to your stock file
 client = OpenAI()
 
-# Models (updated names)
-TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"   # speech → text
-CHAT_MODEL       = "gpt-4.1-mini"             # main reasoning model
-TTS_MODEL        = "gpt-4o-mini-tts"          # text → speech
-TTS_VOICE        = "coral"                    # alloy / ash / ballad / coral / echo / etc.
+app = Flask(__name__, template_folder="templates", static_folder="static")
 
-# ========= 2. STREAMLIT UI LAYOUT =========
 
-st.set_page_config(page_title="CSV Voice Assistant", page_icon="🧠")
-st.title("🧠📊 CSV Voice Assistant (Option 1 Demo)")
-st.write(
-    "1. Upload a CSV or Excel file\n"
-    "2. Click the mic and ask a question with your voice\n"
-    "3. The AI will answer based **only** on your file and speak back"
-)
+def load_stock_csv_as_text() -> str:
+    """
+    Load the CSV and return it as a CSV string the model can see.
+    """
+    if not os.path.exists(CSV_PATH):
+        raise FileNotFoundError(f"CSV file not found: {CSV_PATH}")
+    df = pd.read_csv(CSV_PATH)
+    # You can print a preview in the server logs if you want
+    print("=== Stock preview ===")
+    print(df.head())
+    print("=====================")
+    return df.to_csv(index=False)
 
-uploaded_file = st.file_uploader(
-    "Upload your CSV/Excel file with data",
-    type=["csv", "xlsx"]
-)
 
-if not uploaded_file:
-    st.info("Please upload a CSV or Excel file to begin.")
-    st.stop()
+@app.route("/")
+def index():
+    # Just serve the HTML page
+    return render_template("index.html")
 
-# ========= 3. LOAD DATAFRAME FROM FILE =========
 
-try:
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
-except Exception as e:
-    st.error("Error reading file.")
-    st.exception(e)
-    st.stop()
+@app.route("/client-secret")
+def client_secret():
+    """
+    Returns a short-lived Realtime client secret to the browser.
+    The CSV is embedded in the session instructions so the voice agent
+    can answer questions based ONLY on this stock data.
+    """
+    csv_text = load_stock_csv_as_text()
 
-st.subheader("Data preview")
-st.dataframe(df.head())
+    instructions = f"""
+You are a friendly retail stock assistant.
 
-# Whole table as CSV text (for context to the model)
-csv_text = df.to_csv(index=False)
+You have access to the following stock table in CSV format:
 
-# ========= 4. AUDIO INPUT (MIC) =========
-
-st.markdown("### 🎙️ Ask a question by voice")
-audio_data = st.audio_input("Record your question")
-
-if not audio_data:
-    st.info("Click the microphone above and ask something like:\n"
-            "- 'How many items are low in stock?'\n"
-            "- 'What is the quantity of product X?'")
-    st.stop()
-
-st.info("Processing your audio… this may take a few seconds.")
-
-# ========= 5. SAVE AUDIO TO TEMP FILE =========
-
-with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
-    tmp_audio.write(audio_data.read())
-    tmp_audio_path = tmp_audio.name
-
-try:
-    # ========= 6. SPEECH → TEXT (TRANSCRIPTION) =========
-    with open(tmp_audio_path, "rb") as f:
-        transcription = client.audio.transcriptions.create(
-            model=TRANSCRIBE_MODEL,
-            file=f
-        )
-
-    user_question = transcription.text
-
-    st.markdown("### 🗣️ You said:")
-    st.write(user_question)
-
-    # ========= 7. CHATGPT ANSWER BASED ON CSV =========
-
-    system_prompt = f"""
-You are a helpful data assistant that answers questions about a table.
-
-You are given a CSV table with the current data:
-
-CSV DATA:
 {csv_text}
 
 Rules:
-- Always base your answer ONLY on this CSV data.
-- If the user asks about a product or row, look for it in the table.
-- If you cannot find something in the CSV, say clearly that it is not available.
-- Be brief, clear, and conversational.
-- Do NOT invent numbers or products that are not present in the CSV.
+- Answer questions ONLY using this CSV.
+- If a product or detail is not in the CSV, say you don't know.
+- Use exact product names from the CSV when possible.
+- Be brief, clear and conversational.
 """
 
-    response = client.responses.create(
-        model=CHAT_MODEL,
-        input=[
-            {
-                "role": "system",
-                "content": system_prompt
+    secret = client.realtime.client_secrets.create(  # uses /v1/realtime/client_secrets :contentReference[oaicite:0]{index=0}
+        session={
+            "type": "realtime",
+            "model": "gpt-realtime",  # realtime speech model :contentReference[oaicite:1]{index=1}
+            "instructions": instructions,
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    # server VAD = automatic “start/stop on speech” turns
+                    "turn_detection": {
+                        "type": "server_vad",
+                    },
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": "alloy",  # pick your favorite voice
+                    "speed": 1.0,
+                },
             },
-            {
-                "role": "user",
-                "content": user_question
-            }
-        ]
+            "output_modalities": ["audio", "text"],
+        }
     )
 
-    # New Responses API helper
-    answer_text = response.output_text
+    # We only return the secret value; the browser never sees your real API key
+    return jsonify({"client_secret": secret.value})
 
-    st.markdown("### ✅ Answer")
-    st.write(answer_text)
 
-    # ========= 8. TEXT → SPEECH (TTS) =========
-
-    st.markdown("### 🔊 Spoken Answer")
-
-    speech_path = Path(tempfile.gettempdir()) / "answer_speech.mp3"
-
-    with client.audio.speech.with_streaming_response.create(
-        model=TTS_MODEL,
-        voice=TTS_VOICE,
-        input=answer_text,
-        instructions="Speak clearly in a friendly, helpful tone.",
-    ) as tts_response:
-        tts_response.stream_to_file(speech_path)
-
-    with open(speech_path, "rb") as f:
-        audio_bytes = f.read()
-
-    st.audio(audio_bytes, format="audio/mp3", autoplay=True)
-
-except Exception as e:
-    st.error("An error occurred while processing your request:")
-    st.exception(e)   # <-- this will show the real traceback in Streamlit
-
-finally:
-    # Clean up temp audio file
-    try:
-        os.remove(tmp_audio_path)
-    except OSError:
-        pass
+if __name__ == "__main__":
+    if "OPENAI_API_KEY" not in os.environ:
+        raise RuntimeError("Please set OPENAI_API_KEY environment variable.")
+    app.run(debug=True, host="0.0.0.0", port=5000)
