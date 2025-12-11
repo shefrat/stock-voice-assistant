@@ -12,7 +12,7 @@ from streamlit_mic_recorder import mic_recorder
 # os.environ["GEMINI_API_KEY"] = "YOUR_API_KEY_HERE"
 
 # Validate API Key
-if not os.environ.get("GEMINI_API_KEY"):
+if not os.environ.get("GOOGLE_API_KEY"):
     st.error("⚠️ API Key missing! Please set GEMINI_API_KEY in your environment.")
     st.stop()
 
