@@ -12,11 +12,11 @@ from streamlit_mic_recorder import mic_recorder
 # os.environ["GEMINI_API_KEY"] = "YOUR_API_KEY_HERE"
 
 # Validate API Key
-if not os.environ.get("GOOGLE_API_KEY"):
+if not os.environ.get("GEMINI_API_KEY"):
     st.error("⚠️ API Key missing! Please set GEMINI_API_KEY in your environment.")
     st.stop()
 
-# Initialize Model (Using the older syntax for compatibility)
+# Initialize Model
 model_name = 'gemini-2.5-flash'
 
 SYSTEM_INSTRUCTION_BASE = """
@@ -45,10 +45,17 @@ def text_to_speech(text):
             tts.write_to_fp(temp_tts)
             temp_tts_path = temp_tts.name
         
-        st.audio(temp_tts_path, format='audio/mp3', autoplay=True)
-        # Small delay to ensure player loads
-        time.sleep(1) 
+        # Use an empty container for the audio player to prevent layout jumps
+        audio_placeholder = st.empty()
+        audio_placeholder.audio(temp_tts_path, format='audio/mp3', autoplay=True)
+        
+        # Give the browser time to start playing before cleanup
+        time.sleep(2) 
+        
+        # Clear the player and remove the file
+        audio_placeholder.empty()
         os.remove(temp_tts_path)
+        
     except Exception as e:
         st.warning(f"Audio playback failed: {e}")
 
@@ -106,7 +113,6 @@ if uploaded_file:
     
     with col1:
         # THE RECORDER BUTTON
-        # key="voice_recorder" is CRITICAL to prevent 'nothing happens' bugs
         audio_data = mic_recorder(
             start_prompt="🎤 Speak",
             stop_prompt="🛑 Stop",
@@ -129,8 +135,9 @@ if uploaded_file:
                 myfile = genai.upload_file(temp_audio_path)
                 
                 # Send to Chat
+                # 🎯 FIX IS HERE: Changed 'contents' to 'content'
                 response = st.session_state.chat.send_message(
-                    contents=[myfile],
+                    content=[myfile], 
                     config={'temperature': 0.1}
                 )
                 answer_text = response.text
@@ -149,9 +156,6 @@ if uploaded_file:
                 # Cleanup
                 if os.path.exists(temp_audio_path):
                     os.remove(temp_audio_path)
-                # Note: We skip deleting 'myfile' from cloud to speed up response, 
-                # but you can add genai.delete_file(myfile.name) here if desired.
-                
                 # Rerun to update chat history
                 st.rerun()
 
