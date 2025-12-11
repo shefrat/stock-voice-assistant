@@ -1,12 +1,3 @@
 streamlit
-# Use the current, stable name for the Gemini Python SDK and specify a 
-# minimum version to ensure the 'Client()' method is available.
-google-genai>=0.10.0
-
-# Keep the original package name just in case it is still needed by your setup
-google-generativeai
-
+openai
 pandas
-gTTS
-openpyxl
-streamlit-mic-recorder

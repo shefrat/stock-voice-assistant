@@ -1,150 +1,159 @@
-import streamlit as st
-import google.generativeai as genai
-import pandas as pd
-from gtts import gTTS
-import tempfile
 import os
-import time
-from streamlit_mic_recorder import mic_recorder
+import tempfile
+from pathlib import Path
 
-# --- CONFIGURATION ---
-# Replace with your actual key if not in environment variables
-# os.environ["GEMINI_API_KEY"] = "YOUR_API_KEY_HERE"
+import streamlit as st
+import pandas as pd
+from openai import OpenAI
 
-if not os.environ.get("GOOGLE_API_KEY"):
-    st.error("⚠️ API Key missing! Please set GEMINI_API_KEY in your environment.")
+# ========= 1. OPENAI CLIENT CONFIG =========
+
+# Make sure OPENAI_API_KEY is set in your environment
+# e.g. export OPENAI_API_KEY="sk-..."
+client = OpenAI()
+
+# You can adjust these model names if needed
+TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"   # speech → text
+CHAT_MODEL       = "gpt-5.1-mini"             # main reasoning model
+TTS_MODEL        = "gpt-4o-mini-tts"          # text → speech
+TTS_VOICE        = "coral"                    # alloy / ash / ballad / coral / echo / etc.
+
+
+# ========= 2. STREAMLIT UI LAYOUT =========
+
+st.set_page_config(page_title="CSV Voice Assistant", page_icon="🧠")
+st.title("🧠📊 CSV Voice Assistant (Option 1 Demo)")
+st.write(
+    "1. Upload a CSV or Excel file\n"
+    "2. Click the mic and ask a question with your voice\n"
+    "3. The AI will answer based **only** on your file and speak back"
+)
+
+uploaded_file = st.file_uploader(
+    "Upload your CSV/Excel file with data",
+    type=["csv", "xlsx"]
+)
+
+if not uploaded_file:
+    st.info("Please upload a CSV or Excel file to begin.")
     st.stop()
 
-model_name = 'gemini-2.5-flash'
+# ========= 3. LOAD DATAFRAME FROM FILE =========
 
-# --- NEW: CONFIGURATION DICTIONARY ---
-# We define settings here to pass them during model creation, avoiding the 'config' error later.
-generation_config = {
-    "temperature": 0.1
-}
+try:
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
+except Exception as e:
+    st.error(f"Error reading file: {e}")
+    st.stop()
 
-SYSTEM_INSTRUCTION_BASE = """
-You are a helpful retail stock assistant. All your answers must be based *strictly* on 
-the provided stock data, which includes columns like Item_Name, Quantity, Price, etc.
-The data available is (first 10 rows):
-{csv_data_string}
+st.subheader("Data preview")
+st.dataframe(df.head())
 
-Always keep the answers conversational and concise. Acknowledge that you have the stock data.
+# Whole table as CSV text (for context to the model)
+csv_text = df.to_csv(index=False)
+
+
+# ========= 4. AUDIO INPUT (MIC) =========
+
+st.markdown("### 🎙️ Ask a question by voice")
+audio_data = st.audio_input("Record your question")
+
+if not audio_data:
+    st.info("Click the microphone above and ask something like:\n"
+            "- 'How many items are low in stock?'\n"
+            "- 'What is the quantity of product X?'")
+    st.stop()
+
+st.info("Processing your audio… this may take a few seconds.")
+
+
+# ========= 5. SAVE AUDIO TO TEMP FILE =========
+
+with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
+    tmp_audio.write(audio_data.read())
+    tmp_audio_path = tmp_audio.name
+
+try:
+    # ========= 6. SPEECH → TEXT (TRANSCRIPTION) =========
+    with open(tmp_audio_path, "rb") as f:
+        transcription = client.audio.transcriptions.create(
+            model=TRANSCRIBE_MODEL,
+            file=f
+        )
+
+    user_question = transcription.text
+
+    st.markdown("### 🗣️ You said:")
+    st.write(user_question)
+
+    # ========= 7. CHATGPT ANSWER BASED ON CSV =========
+
+    system_prompt = f"""
+You are a helpful data assistant that answers questions about a table.
+
+You are given a CSV table with the current data:
+
+CSV DATA:
+{csv_text}
+
+Rules:
+- Always base your answer ONLY on this CSV data.
+- If the user asks about a product or row, look for it in the table.
+- If you cannot find something in the CSV, say clearly that it is not available.
+- Be brief, clear, and conversational.
+- Do NOT invent numbers or products that are not present in the CSV.
 """
 
-# --- SESSION STATE INITIALIZATION ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "chat" not in st.session_state:
-    st.session_state.chat = None
-if "context_loaded" not in st.session_state:
-    st.session_state.context_loaded = False
+    response = client.responses.create(
+        model=CHAT_MODEL,
+        input=[
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_question
+            }
+        ]
+    )
 
-# --- HELPER FUNCTIONS ---
-def text_to_speech(text):
-    """Converts text to speech and plays it."""
+    # Helper: new API returns output as a structured object; `.output_text`
+    answer_text = response.output_text
+
+    st.markdown("### ✅ Answer")
+    st.write(answer_text)
+
+    # ========= 8. TEXT → SPEECH (TTS) =========
+
+    st.markdown("### 🔊 Spoken Answer")
+
+    speech_path = Path(tempfile.gettempdir()) / "answer_speech.mp3"
+
+    # Stream TTS audio to a file
+    with client.audio.speech.with_streaming_response.create(
+        model=TTS_MODEL,
+        voice=TTS_VOICE,
+        input=answer_text,
+        instructions="Speak clearly in a friendly, helpful tone.",
+    ) as tts_response:
+        tts_response.stream_to_file(speech_path)
+
+    # Play back in Streamlit
+    with open(speech_path, "rb") as f:
+        audio_bytes = f.read()
+
+    st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+
+except Exception as e:
+    st.error(f"An error occurred: {e}")
+
+finally:
+    # Clean up temp audio file
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_tts:
-            tts = gTTS(text=text, lang='en')
-            tts.write_to_fp(temp_tts)
-            temp_tts_path = temp_tts.name
-        
-        audio_placeholder = st.empty()
-        audio_placeholder.audio(temp_tts_path, format='audio/mp3', autoplay=True)
-        time.sleep(2) 
-        audio_placeholder.empty()
-        os.remove(temp_tts_path)
-    except Exception as e:
-        st.warning(f"Audio playback failed: {e}")
-
-def get_stock_data_string(uploaded_file):
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
-        return df.head(10).to_string(index=False)
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
-        return ""
-
-# --- MAIN APP UI ---
-st.title("🛒 Retail Stock Voice Assistant")
-
-uploaded_file = st.file_uploader("Upload Stock CSV/Excel", type=["csv", "xlsx"])
-
-if uploaded_file:
-    # 1. Initialize Chat Context (Runs Once)
-    if not st.session_state.context_loaded:
-        csv_string = get_stock_data_string(uploaded_file)
-        final_system_instruction = SYSTEM_INSTRUCTION_BASE.format(csv_data_string=csv_string)
-        
-        # 🎯 FIX 2: Pass 'generation_config' here instead of in send_message
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=final_system_instruction,
-            generation_config=generation_config
-        )
-        
-        st.session_state.chat = model.start_chat()
-        st.session_state.context_loaded = True
-        st.session_state.messages = []
-        
-        welcome_msg = "I've loaded your stock data. Ready for your questions!"
-        st.session_state.messages.append({"role": "assistant", "content": welcome_msg})
-        text_to_speech(welcome_msg)
-        st.rerun()
-
-    # 2. Display Chat History
-    chat_container = st.container()
-    with chat_container:
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.write(message["content"])
-
-    # 3. Voice Input Section
-    st.write("---")
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        # The button will look like a single microphone icon.
-        # Click once to start, click "Stop" when done.
-        audio_data = mic_recorder(
-            start_prompt="🎤 Start",
-            stop_prompt="🛑 Stop",
-            just_once=True,
-            use_container_width=True,
-            format="wav",
-            key="voice_recorder"
-        )
-
-    # 4. Process Audio
-    if audio_data and audio_data['bytes']:
-        with st.spinner("Listening and analyzing..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
-                temp_audio.write(audio_data['bytes'])
-                temp_audio_path = temp_audio.name
-
-            try:
-                myfile = genai.upload_file(temp_audio_path)
-                
-                # 🎯 FIX 1: Use 'content' (singular) and REMOVE 'config'
-                response = st.session_state.chat.send_message(
-                    content=[myfile]
-                )
-                answer_text = response.text
-
-                st.session_state.messages.append({"role": "user", "content": "🎤 (Audio Question)"})
-                st.session_state.messages.append({"role": "assistant", "content": answer_text})
-                
-                text_to_speech(answer_text)
-
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
-
-            finally:
-                if os.path.exists(temp_audio_path):
-                    os.remove(temp_audio_path)
-                st.rerun()
-
-else:
-    st.info("👆 Please upload a file to start.")
+        os.remove(tmp_audio_path)
+    except OSError:
+        pass
